@@ -1,0 +1,460 @@
+#' @include SparseLogMap-class.R
+NULL
+
+#' @exportClass MatrixLayers
+setClass(
+  "MatrixLayers",
+  slots = c(
+    rowMap = "SparseLogMap",
+    colMap = "SparseLogMap",
+    default = "integer",
+    data = "list"
+  )
+)
+
+setValidity(
+  Class = 'MatrixLayers',
+  method = function(object) {
+    if (length(object) == 0) {
+      if (length(object@default) > 0) {
+        return("Empty MatrixLayers should not contain default layer")
+      }
+      if (any(ncol(object@rowMap) > 0, ncol(object@colMap) > 0)) {
+        return(
+          "Map(s) for rows and columns should contain 0 column ",
+          "for empty MatrixLayers"
+        )
+      }
+    }
+    dimnms <- dimnames(object)
+    if (!all(lengths(dimnms) == dim(object))) {
+      return("Lengths of dimension names should be equal to dimension numbers.")
+    }
+    nms <- names(object)
+    nms.rowmap <- colnames(object@rowMap)
+    nms.colmap <- colnames(object@colMap)
+    if (!all(lengths(list(nms.rowmap, nms.colmap)) == length(nms))) {
+      return("Unmatched names of layers with names of Maps")
+    }
+    for (i in seq_along(object@data)) {
+      layer.dimnms <- .valid_mat_dimnames(object@data[[i]])
+      .valid_mat_by_dimnames(
+        mat = object@data[[i]],
+        rownames = object@rowMap[[i]],
+        colnames = object@colMap[[i]]
+      )
+    }
+    return(TRUE)
+  }
+)
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# Constructor ##################################################################
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+#' @export MatrixLayers
+MatrixLayers <- function(x, ...) {
+  UseMethod(generic = "MatrixLayers", object = x)
+}
+
+#' @export
+#' @method MatrixLayers default
+MatrixLayers.default <- function(x, ...) {
+  MatrixLayers.list(list(x), ...)
+}
+
+#' @export
+#' @method MatrixLayers list
+MatrixLayers.list <- function(x, default = NULL, ...) {
+  out <- .init_MatrixLayers(layers = x, ...)
+  if (length(out) == 0) {
+    return(out)
+  }
+  defaultLayer(out) <- default %||% 1L
+  return(out)
+}
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# Helper functions #############################################################
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# S3 methods ###################################################################
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+#' @export
+#' @method defaultLayer MatrixLayers
+defaultLayer.MatrixLayers <- function(object, ...) {
+  object@default
+}
+
+#' @export
+#' @method defaultLayer<- MatrixLayers
+"defaultLayer<-.MatrixLayers" <- function(object, ..., value) {
+  if (length(object) == 0) {
+    warning("No layer presented in the MatrixLayers, set 'default' to empty.")
+    object@default <- integer(0L)
+    return(object)
+  }
+  if (length(value) == 0) {
+    stop("'default' cannot be empty.")
+  }
+  value <- value[1]
+  if (is.character(value)) {
+    new.value <- match(value, names(object))
+    if (is.na(new.value)) {
+      stop("Invalid layer name '", value, "'")
+    }
+    value <- new.value
+  }
+  value <- as.integer(value)
+  if (value == 0 | value > length(object)) {
+    stop("'defaultLayer' out of bounds")
+  }
+  object@default <- value
+  return(object)
+}
+
+#' @export
+#' @method getLayer MatrixLayers
+getLayer.MatrixLayers <- function(object, i) {
+  if (is_missing(i)) {
+    i <- defaultLayer(object)
+  }
+  if (length(i) == 0) {
+    return(NULL)
+  }
+  .get_layer(object, i)
+}
+
+#' @export
+#' @method $ MatrixLayers
+"$.MatrixLayers" <- function(x, i) {
+  return(getLayer(object = x, i = i))
+}
+
+#' @export
+#' @method setLayer MatrixLayers
+setLayer.MatrixLayers <- function(object, i, new.layer, ...) {
+  if (is_missing(i)) {
+    i <- defaultLayer(object)
+  }
+  if (length(i) == 0) {
+    i <- defaultLayer(object)
+  }
+  if (length(i) == 0) {
+    if (is.null(new.layer)) {
+      return(x)
+    }
+    i <- 1L
+    object@default <- 1L
+  }
+  .set_layer(object, i, new.layer)
+}
+
+#' @export
+#' @method $<- MatrixLayers
+"$<-.MatrixLayers" <- function(x, i, value) {
+  setLayer(x, i, value)
+}
+
+## Methods for R-defined generics ##############################################
+
+#' @export
+#' @method .DollarNames MatrixLayers
+.DollarNames.MatrixLayers <- function(x, pattern = '') {
+  return(.DollarNames(x@data, pattern = pattern))
+}
+
+#' @export
+#' @method names MatrixLayers
+names.MatrixLayers <- function(x) {
+  return(names(x@data))
+}
+
+#' @export
+#' @method names<- MatrixLayers
+"names<-.MatrixLayers" <- function(x, value) {
+  colnames(x@rowMap) <- value
+  colnames(x@colMap) <- value
+  names(x@data) <- value
+  return(x)
+}
+
+#' @export
+#' @method length MatrixLayers
+length.MatrixLayers <- function(x) {
+  return(length(x@data))
+}
+
+#' @export
+#' @method dim MatrixLayers
+dim.MatrixLayers <- function(x) {
+  return(c(nrow(x@rowMap), nrow(x@colMap)))
+}
+
+#' @export
+#' @method dimnames MatrixLayers
+dimnames.MatrixLayers <- function(x) {
+  return(list(rownames(x@rowMap), rownames(x@colMap)))
+}
+
+#' @export
+#' @method dimnames<- MatrixLayers
+"dimnames<-.MatrixLayers" <- function(x, value) {
+  msg <- "Invalid 'dimnames' given for a MatrixLayers. "
+  if (!is_bare_list(value, n = 2L)) {
+    stop(msg, call. = FALSE)
+  }
+  if (!all(lengths(value) == dim(x))) {
+    stop(msg, call. = FALSE)
+  }
+  old.dimnames <- dimnames(x)
+  rownames(x@rowMap) <- value[[1L]]
+  validObject(x@rowMap)
+  rownames(x@colMap) <- value[[2L]]
+  validObject(x@colMap)
+  for (i in seq_along(x@data)) {
+    rownames(x@data[[i]]) <- value[[1L]][fmatch(
+      rownames(x@data[[i]]),
+      old.dimnames[[1L]]
+    )]
+    colnames(x@data[[i]]) <- value[[2L]][fmatch(
+      colnames(x@data[[i]]),
+      old.dimnames[[2L]]
+    )]
+  }
+  return(x)
+}
+
+#' @export
+#' @method [ MatrixLayers
+"[.MatrixLayers" <- function(x, i, j, ..., drop = FALSE) {
+  check.i <- is_missing(i)
+  check.j <- is_missing(j)
+  if (all(check.i, check.j)) {
+    return(x)
+  }
+  if (all(length(i) == 0, length(j) == 0, drop)) {
+    return(MatrixLayers(list()))
+  }
+  x@rowMap <- x@rowMap[i, , drop = FALSE]
+  x@colMap <- x@colMap[j, , drop = FALSE]
+  if (any(nrow(x@rowMap) == 0, nrow(x@colMap) == 0)) {
+    if (drop) {
+      x@rowMap <- x@rowMap[, integer(), drop = FALSE]
+      x@colMap <- x@colMap[, integer(), drop = FALSE]
+      x@data <- list()
+      x@default <- integer(0L)
+      return(x)
+    }
+  }
+  keep <- logical(length(x))
+  for (i in seq_along(x@data)) {
+    x@data[[i]] <- .subset_mat_by_dimnames(
+      x@data[[i]],
+      x@rowMap[[i]],
+      x@colMap[[i]]
+    )
+    if (prod(dim(x@data[[i]])) > 0) {
+      keep[i] <- TRUE
+    }
+  }
+  if (!drop) {
+    return(x)
+  }
+  old.default <- x@default
+  x@data <- x@data[keep]
+  x@rowMap <- x@rowMap[, keep, drop = FALSE]
+  x@colMap <- x@colMap[, keep, drop = FALSE]
+  keep.idx <- which(keep)
+  x@default <- match(old.default, keep.idx)
+  return(x)
+}
+
+#' @export
+#' @method [[ MatrixLayers
+"[[.MatrixLayers" <- function(x, i, j, ..., drop = FALSE) {
+  .get_layer(x, i)
+}
+
+#' @export
+#' @method as.list MatrixLayers
+as.list.MatrixLayers <- function(x) {
+  return(x@data)
+}
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# S4 methods ###################################################################
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+#' @export
+setMethod(
+  f = '[[<-',
+  signature = c(
+    x = 'MatrixLayers',
+    i = 'integer',
+    j = 'missing',
+    value = 'ANY'
+  ),
+  definition = function(x, i, ..., value) {
+    setLayer(x, i, new.layer = value)
+  }
+)
+
+#' @export
+setMethod(
+  f = '[[<-',
+  signature = c(
+    x = 'MatrixLayers',
+    i = 'numeric',
+    j = 'missing',
+    value = 'ANY'
+  ),
+  definition = function(x, i, ..., value) {
+    i <- as.integer(i)
+    setLayer(x, i, new.layer = value)
+  }
+)
+
+#' @export
+setMethod(
+  f = '[[<-',
+  signature = c(
+    x = 'MatrixLayers',
+    i = 'character',
+    j = 'missing',
+    value = 'ANY'
+  ),
+  definition = function(x, i, ..., value) {
+    setLayer(x, i, new.layer = value)
+  }
+)
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# Internal #####################################################################
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+.check_names_MatrixLayers <- function(x) {
+  if (length(names(x)) == 0 & length(x) > 0) {
+    stop("The MatrixLayers doesn't have names")
+  }
+  invisible(NULL)
+}
+
+.get_layer <- function(object, i) {
+  rownms <- object@rowMap[[i]]
+  colnms <- object@rowMap[[i]]
+  layer <- as.list(object)[[i]]
+  .subset_mat_by_dimnames(layer, rownms, colnms)
+}
+
+#' @importMethodsFrom MatrixExtra [
+.subset_mat_by_dimnames <- function(mat, rownames, colnames) {
+  check.rows <- all(rownames(mat) == rownames)
+  check.cols <- all(colnames(mat) == colnames)
+  if (check.rows) {
+    if (!check.cols) {
+      mat <- mat[, colnames, drop = FALSE]
+    }
+    return(mat)
+  }
+  if (check.cols) {
+    return(mat[rownames, , drop = FALSE])
+  }
+  mat[rownames, colnames, drop = FALSE]
+}
+
+.valid_mat_by_dimnames <- function(mat, rownames, colnames) {
+  check.rows <- all(rownames(mat) == rownames)
+  check.cols <- all(colnames(mat) == colnames)
+  if (any(!check.rows, !check.cols)) {
+    stop("Invalid dimension names for the input matrix-like object.")
+  }
+  invisible(NULL)
+}
+
+.set_layer <- function(object, i, new.layer) {
+  if (is.null(new.layer)) {
+    object@rowMap[[i]] <- NULL
+    object@colMap[[i]] <- NULL
+    object@data[[i]] <- new.layer
+    if (length(object) == 0) {
+      object@default <- integer()
+    }
+    return(object)
+  }
+  layer.dimnms <- .valid_mat_dimnames(new.layer)
+  object@rowMap[[i]] <- layer.dimnms[[1]]
+  object@colMap[[i]] <- layer.dimnms[[2]]
+  new.layer <- .subset_mat_by_dimnames(
+    new.layer,
+    rownames = object@rowMap[[i]],
+    colnames = object@colMap[[i]]
+  )
+  object@data[[i]] <- new.layer
+  return(object)
+}
+
+.valid_mat_dimnames <- function(mat) {
+  dimnms <- dimnames(mat)
+  if (any(lengths(dimnms) == 0)) {
+    stop("The matrix-like object must contain both row and column names.")
+  }
+  for (i in seq_along(dimnms)) {
+    if (anyDuplicated(dimnms[[i]])) {
+      stop("The matrix-like object contains duplicated dimension names.")
+    }
+  }
+  return(dimnms)
+}
+
+.empty_MatrixLayers <- function() {
+  new(
+    "MatrixLayers",
+    rowMap = SparseLogMap(character()),
+    colMap = SparseLogMap(character())
+  )
+}
+
+.init_MatrixLayers <- function(layers, max.sparsity = 0.6) {
+  ncol <- length(layers)
+  out <- .empty_MatrixLayers()
+  if (ncol == 0) {
+    return(out)
+  }
+  all.rownms <- list()
+  all.colnms <- list()
+  nnz <- c(0, 0)
+  for (i in seq_along(layers)) {
+    layer.dimnms <- .valid_mat_dimnames(layers[[i]])
+    all.rownms[[i]] <- layer.dimnms[[1]]
+    all.colnms[[i]] <- layer.dimnms[[2]]
+    nnz <- nnz + dim(layers[[i]])
+  }
+  all.rownms <- all.rownms %>%
+    unlist() %>%
+    unique()
+  all.colnms <- all.colnms %>%
+    unlist() %>%
+    unique()
+  sparsity <- nnz / c(length(all.rownms) * ncol, length(all.colnms) * ncol)
+  rowmap <- SparseLogMap(
+    all.rownms,
+    ncol = ncol,
+    invert = sparsity[1] > max.sparsity
+  )
+  colmap <- SparseLogMap(
+    all.rownms,
+    ncol = ncol,
+    invert = sparsity[2] > max.sparsity
+  )
+  for (i in seq_along(layers)) {
+    rowmap[[i]] <- rownames(layers[[i]])
+    colmap[[i]] <- colnames(layers[[i]])
+  }
+  out@rowMap <- rowmap
+  out@colMap <- colmap
+  out@data <- layers
+  return(out)
+}

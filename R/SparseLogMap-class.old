@@ -1,0 +1,509 @@
+
+#' @importClassesFrom Matrix ngCMatrix
+#' @exportClass SparseLogMap
+setClass(Class = 'SparseLogMap', contains = 'ngCMatrix')
+
+#' @exportClass InvertedSparseLogMap
+setClass(Class = 'InvertedSparseLogMap', contains = 'SparseLogMap')
+
+#' @importFrom methods setValidity
+setValidity(
+  Class = 'SparseLogMap',
+  method = function(object) {
+    if (all(dim(object) == 0)) {
+      return(TRUE)
+    }
+    valid <- NULL
+    if (nrow(object) > 0) {
+      # Check rownames
+      if (length(rownames(object)) == 0) {
+        valid <- c(valid, "Row names must be supplied")
+      }
+      if (any(nzchar(rownames(object)) == 0)) {
+        valid <- c(valid, "Row names cannot be empty strings")
+      }
+      if (anyDuplicated(rownames(object))) {
+        valid <- c(valid, "Duplicate row names not allowed")
+      }
+    }
+    if (length(colnames(object)) > 0) {
+      if (any(nzchar(colnames(object)) == 0)) {
+        valid <- c(valid, "column names cannot be empty strings")
+      }
+      if (anyDuplicated(colnames(object))) {
+        valid <- c(valid, "Duplicate column names not allowed")
+      }
+    }
+    return(valid %||% TRUE)
+  }
+)
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# Constructor ##################################################################
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+#' @importFrom Matrix Matrix
+#' @importClassesFrom Matrix ngCMatrix
+#' @export
+SparseLogMap <- function(x, ncol = 0, invert = FALSE) {
+  if (length(x) == 0) {
+    if (invert) {
+      return(new("InvertedSparseLogMap"))
+    }
+    return(new("SparseLogMap"))
+  }
+  if (!is.character(x)) {
+    x <- as.character(x)
+  }
+  out <- Matrix(nrow = length(x), ncol = ncol, sparse = TRUE) %>%
+    as("ngCMatrix")
+  rownames(out) <- x
+  gc(verbose = FALSE)
+  if (invert) {
+    return(new("InvertedSparseLogMap", out))
+  }
+  new("SparseLogMap", out)
+}
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# Helper functions #############################################################
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# S3 methods ###################################################################
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+#' @export
+#' @method as.matrix SparseLogMap
+as.matrix.SparseLogMap <- function(x, ...) {
+  x <- as(x, "ngCMatrix")
+  if (.inverted(x)) {
+    return(as.matrix(!x))
+  }
+  as.matrix(x)
+}
+
+#' @importFrom Matrix rowSums colSums
+dropEmpty.SparseLogMap <- function(x, drop.columns = FALSE, ...) {
+  old.class <- class(x)
+  is.inverted <- .inverted(x)
+  row.sum <- rowSums(x)
+  fidx <- which(row.sum == 0)
+  if (length(fidx) == 0) {
+    return(x)
+  }
+  x <- x[-fidx, , drop = FALSE]  ## ngCMatrix
+  if (!drop.columns) {
+    return(as(x, old.class))
+  }
+  col.sum <- colSums(x)
+  fidx <- which(col.sum == 0)
+  if (length(fidx) > 0) {
+    x <- x[, -fidx, drop = FALSE]
+  }
+  as(x, old.class)
+}
+
+#' @export
+#' @method intersectedEntries SparseLogMap
+intersectedEntries.SparseLogMap <- function(x, ...) {
+  row.sums <- rowSums(x)
+  return(rownames(x)[row.sums > 1])
+}
+
+#' @export
+#' @method invertMap SparseLogMap
+invertMap.SparseLogMap <- function(x, ...) {
+  x %>%
+    as("ngCMatrix") %>%
+    as("InvertedSparseLogMap")
+}
+
+#' @export
+#' @method invertMap InvertedSparseLogMap
+invertMap.InvertedSparseLogMap <- function(x, ...) {
+  x %>%
+    as("ngCMatrix") %>%
+    as("SparseLogMap")
+}
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# S4 methods ###################################################################
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+setAs(
+  from = "SparseLogMap",
+  to = "InvertedSparseLogMap",
+  def = function(from) {
+    from <- (!as(from, "ngCMatrix")) %>%
+      as("CsparseMatrix")
+    new("InvertedSparseLogMap", !from)
+  }
+)
+
+setAs(
+  from = "InvertedSparseLogMap",
+  to = "SparseLogMap",
+  def = function(from) {
+    from <- (!as(from, "ngCMatrix")) %>%
+      as("CsparseMatrix")
+    new("SparseLogMap", from)
+  }
+)
+
+#' @export
+setMethod(
+  f = "!",
+  signature = "SparseLogMap",
+  definition = function(x) invertMap.SparseLogMap(x)
+)
+
+#' @export
+setMethod(
+  f = "!",
+  signature = "InvertedSparseLogMap",
+  definition = function(x) invertMap.InvertedSparseLogMap(x)
+)
+
+#' @export
+setMethod(
+  f = '[[',
+  signature = c(x = 'SparseLogMap', i = 'character', j = 'missing'),
+  definition = function(x, i, ...) {
+    .check_colnames_SparseLogMap(x)
+    i <- i[1]
+    i <- match.arg(i, choices = colnames(x))
+    .get_rownames_SparseLogMap(x, i)
+  }
+)
+
+#' @export
+setMethod(
+  f = '[[',
+  signature = c(x = 'SparseLogMap', i = 'integer', j = 'missing'),
+  definition = function(x, i, ...) {
+    i <- i[1]
+    .get_rownames_SparseLogMap(x, i)
+  }
+)
+
+#' @export
+setMethod(
+  f = '[[',
+  signature = c(x = 'SparseLogMap', i = 'numeric', j = 'missing'),
+  definition = function(x, i, ...) {
+    i <- i[1]
+    return(x[[as.integer(i)]])
+  }
+)
+
+setMethod(
+  f = '[[<-',
+  signature = c(
+    x = 'SparseLogMap',
+    i = 'integer',
+    j = 'missing',
+    value = 'character'
+  ),
+  definition = function(x, i, ..., value) {
+    if (length(colnames(x)) > 0) {
+      stop(
+        "The SparseLogMap contains column names, ",
+        "new entries cannot be set using indices"
+      )
+    }
+    .set_entries_SparseLogMap(x, i, ..., value = value)
+  }
+)
+
+#' @export
+setMethod(
+  f = '[[<-',
+  signature = c(
+    x = 'SparseLogMap',
+    i = 'character',
+    j = 'missing',
+    value = 'character'
+  ),
+  definition = function(x, i, ..., value) {
+    .check_colnames_SparseLogMap(x)
+    idx <- match(i, colnames(x))
+    if (is.na(idx)) {
+      idx <- ncol(x) + 1L
+    }
+    .set_entries_SparseLogMap(x, idx, ..., value, new.name = i)
+  }
+)
+
+#' @export
+setMethod(
+  f = '[[<-',
+  signature = c(
+    x = 'SparseLogMap',
+    i = 'numeric',
+    j = 'missing',
+    value = 'character'
+  ),
+  definition = function(x, i, ..., value) {
+    x[[as.integer(i)]] <- value
+    return(x)
+  }
+)
+
+#' @export
+setMethod(
+  f = '[[<-',
+  signature = c(
+    x = 'SparseLogMap',
+    i = 'integer',
+    j = 'missing',
+    value = 'NULL'
+  ),
+  definition = function(x, i, ..., value) {
+    if (i < 1) {
+      return(x)
+    }
+    is.inverted <- .inverted(x)
+    x <- x[, -idx, drop = FALSE]
+    if (is.inverted) {
+      return(as(x, "InvertedSparseLogMap"))
+    }
+    return(as(x, "SparseLogMap"))
+  }
+)
+
+#' @export
+setMethod(
+  f = '[[<-',
+  signature = c(
+    x = 'SparseLogMap',
+    i = 'numeric',
+    j = 'missing',
+    value = 'NULL'
+  ),
+  definition = function(x, i, ..., value) {
+    x[[as.integer(i)]] <- value
+    return(x)
+  }
+)
+
+#' @export
+setMethod(
+  f = '[[<-',
+  signature = c(
+    x = 'SparseLogMap',
+    i = 'character',
+    j = 'missing',
+    value = 'NULL'
+  ),
+  definition = function(x, i, ..., value) {
+    .check_colnames_SparseLogMap(x)
+    idx <- match(i, colnames(x))
+    if (is.na(idx)) {
+      return(x)
+    }
+    x[[idx]] <- value
+    return(x)
+  }
+)
+
+#' @export
+setMethod(
+  f = '[',
+  signature = c(x = 'SparseLogMap', i = 'ANY', j = 'NULL', drop = "ANY"),
+  definition = function(x, i, j, ..., drop) {
+    old.class <- class(x)
+    as(x, "ngCMatrix")[i, j, drop = drop] %>%
+      as(old.class)
+  }
+)
+
+#' @importClassesFrom Matrix index
+#' @export
+setMethod(
+  f = '[',
+  signature = c(x = 'SparseLogMap', i = "index", j = "index", drop = "logical"),
+  definition = function(x, i, j, ..., drop) {
+    old.class <- class(x)
+    as(x, "ngCMatrix")[i, j, drop = drop] %>%
+      as(old.class)
+  }
+)
+
+
+
+
+
+
+
+#' @export
+setMethod(
+  f = '[',
+  signature = 'SparseLogMap',
+  definition = function(x, i, j, ..., drop) {
+    old.class <- class(x)
+    x <- as(x, "ngCMatrix")
+    callNextMethod()
+    as(x, old.class)
+  }
+)
+
+#' @export
+setMethod(
+  f = '[',
+  signature = c(x = 'SparseLogMap', drop = "missing"),
+  definition = function(x, i, j, ..., drop) {
+    old.class <- class(x)
+    x <- as(x, "ngCMatrix")
+    callNextMethod()
+    as(x, old.class)
+  }
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# @export
+# setMethod(
+#   f = '[',
+#   signature = 'SparseLogMap',
+#   definition = function(x, i, j, ..., drop = TRUE) {
+#     old.class <- class(x)
+#     x <- as(x, "ngCMatrix")[i, j, drop = drop]
+#     if (inherits(x, 'SparseLogMap')) {
+#       return(x)
+#     }
+#     as(x, old.class)
+#   }
+# )
+
+#' @importFrom Matrix rowSums
+#' @export
+setMethod(
+  f = "rowSums",
+  signature = "InvertedSparseLogMap",
+  definition = function(x, na.rm = FALSE, dims = 1, ...) {
+    ncol(x) - callNextMethod()
+  }
+)
+
+#' @importFrom Matrix colSums
+setMethod(
+  f = "colSums",
+  signature = "InvertedSparseLogMap",
+  definition = function(x, na.rm = FALSE, dims = 1, ...) {
+    nrow(x) - callNextMethod()
+  }
+)
+
+#' @export
+setMethod(
+  f = 'show',
+  signature = 'SparseLogMap',
+  definition = function(object) {
+    cat(
+      "A", class(object)[1], "for", nrow(object), "values across",
+      ncol(object), "observations"
+    )
+    return(invisible(x = NULL))
+  }
+)
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# Internal #####################################################################
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+.inverted <- function(x) {
+  inherits(x, "InvertedSparseLogMap")
+}
+
+.check_colnames_SparseLogMap <- function(x) {
+  if (length(colnames(x)) == 0 & ncol(x) > 0) {
+    stop("The SparseLogMap doesn't have column names")
+  }
+  invisible(NULL)
+}
+
+.get_rownames_SparseLogMap <- function(x, i) {
+  if (.inverted(x)) {
+    return(rownames(x)[!x[, i, drop = TRUE]])
+  }
+  return(rownames(x)[x[, i, drop = TRUE]])
+}
+
+.set_entries_SparseLogMap <- function(x, i, ..., value, new.name = NULL) {
+  if (anyDuplicated(value)) {
+    stop("Cannot set duplicated entries into a SparseLogMap")
+  }
+  idx <- match(value, rownames(x)) %>%
+    na.omit()
+  is.inverted <- .inverted(x)
+  x <- as(x, "ngCMatrix")
+  new.mat <- logical(nrow(x))
+  new.mat[idx] <- TRUE
+  if (is.inverted) {
+    new.mat <- !new.mat
+  }
+  if (i <= ncol(x)) {
+    x[, i] <- new.mat
+  } else {
+    if (i > ncol(x) + 1) {
+      stop("subscript out of bounds for i = ", i)
+    }
+    new.mat <- as(new.mat, "ngCMatrix")
+    colnames(new.mat) <- new.name
+    x <- cbind(x, new.mat)
+  }
+  not.found <- value[na.action(idx)]
+  if (length(not.found) > 0) {
+    if (is.inverted) {
+      data <- TRUE
+    } else {
+      data <- FALSE
+    }
+    empty.mat <- Matrix(
+      data = data,
+      nrow = length(not.found),
+      ncol = ncol(x),
+      sparse = TRUE
+    ) %>%
+      as("ngCMatrix")
+    rownames(empty.mat) <- not.found
+    colnames(empty.mat) <- colnames(x)
+    not.found <- logical(length(not.found))
+    if (!is.inverted) {
+      not.found <- !not.found
+    }
+    empty.mat[, i] <- not.found
+    x <- rbind(x, empty.mat)
+  }
+  if (is.inverted) {
+    x <- as(x, "InvertedSparseLogMap")
+  } else {
+    x <- as(x, "SparseLogMap")
+  }
+  return(x)
+}
+
+#' @importFrom Matrix nnzero
+.sparsity_SparseLogMap <- function(x) {
+  n.total <- prod(dim(x))
+  if (.inverted(x)) {
+    return(1 - nnzero(x) / n.total)
+  }
+  return(nnzero(x) / n.total)
+}
